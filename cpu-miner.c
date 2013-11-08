@@ -517,7 +517,7 @@ bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint
 			*hashes_done = stat_ctr;
 			return true;
 		} else {
-			applog(LOG_INFO, "Found share %02x%02x%02x%02x: above target", hash[31], hash[30], hash[29], hash[28]);
+			applog(LOG_DEBUG, "Found share %02x%02x%02x%02x: above target", hash[31], hash[30], hash[29], hash[28]);
 		}
 		if ((n >= max_nonce) || work_restart[thr_id].restart) {
 			*hashes_done = stat_ctr;
