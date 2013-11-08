@@ -11,6 +11,7 @@ AM_MAINTAINER_MODE
 
 dnl Checks for programs
 AC_PROG_CC
+AC_PROG_CXX
 AC_PROG_GCC_TRADITIONAL
 AM_PROG_CC_C_O
 AC_PROG_RANLIB
@@ -103,7 +104,6 @@ AC_CONFIG_FILES([
 	Makefile
 	compat/Makefile
 	compat/jansson/Makefile
-	x86_64/Makefile
 	])
 AC_OUTPUT
 

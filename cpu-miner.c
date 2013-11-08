@@ -25,6 +25,7 @@
 #include <getopt.h>
 #include <jansson.h>
 #include <curl/curl.h>
+#include <openssl/sha.h>
 #include "compat.h"
 #include "miner.h"
 
@@ -80,32 +81,6 @@ struct workio_cmd {
 	} u;
 };
 
-enum sha256_algos {
-	ALGO_C,			/* plain C */
-	ALGO_4WAY,		/* parallel SSE2 */
-	ALGO_VIA,		/* VIA padlock */
-	ALGO_CRYPTOPP,		/* Crypto++ (C) */
-	ALGO_CRYPTOPP_ASM32,	/* Crypto++ 32-bit assembly */
-	ALGO_SSE2_64,		/* SSE2 for x86_64 */
-};
-
-static const char *algo_names[] = {
-	[ALGO_C]		= "c",
-#ifdef WANT_SSE2_4WAY
-	[ALGO_4WAY]		= "4way",
-#endif
-#ifdef WANT_VIA_PADLOCK
-	[ALGO_VIA]		= "via",
-#endif
-	[ALGO_CRYPTOPP]		= "cryptopp",
-#ifdef WANT_CRYPTOPP_ASM32
-	[ALGO_CRYPTOPP_ASM32]	= "cryptopp_asm32",
-#endif
-#ifdef WANT_X8664_SSE2
-	[ALGO_SSE2_64]		= "sse2_64",
-#endif
-};
-
 bool opt_debug = false;
 bool opt_protocol = false;
 bool want_longpoll = true;
@@ -114,14 +89,9 @@ bool use_syslog = false;
 static bool opt_quiet = false;
 static int opt_retries = 10;
 static int opt_fail_pause = 30;
-int opt_scantime = 5;
+int opt_scantime = 120;
 static json_t *opt_config;
 static const bool opt_time = true;
-#ifdef WANT_X8664_SSE2
-static enum sha256_algos opt_algo = ALGO_SSE2_64;
-#else
-static enum sha256_algos opt_algo = ALGO_C;
-#endif
 static int opt_n_threads;
 static int num_processors;
 static char *rpc_url;
@@ -147,24 +117,6 @@ static struct option_help options_help[] = {
 	  "(-c FILE) JSON-format configuration file (default: none)\n"
 	  "See example-cfg.json for an example configuration." },
 
-	{ "algo XXX",
-	  "(-a XXX) Specify sha256 implementation:\n"
-	  "\tc\t\tLinux kernel sha256, implemented in C (default)"
-#ifdef WANT_SSE2_4WAY
-	  "\n\t4way\t\ttcatm's 4-way SSE2 implementation"
-#endif
-#ifdef WANT_VIA_PADLOCK
-	  "\n\tvia\t\tVIA padlock implementation"
-#endif
-	  "\n\tcryptopp\tCrypto++ C/C++ implementation"
-#ifdef WANT_CRYPTOPP_ASM32
-	  "\n\tcryptopp_asm32\tCrypto++ 32-bit assembler implementation"
-#endif
-#ifdef WANT_X8664_SSE2
-	  "\n\tsse2_64\t\tSSE2 implementation for x86_64 machines"
-#endif
-	  },
-
 	{ "quiet",
 	  "(-q) Disable per-thread hashmeter output (default: off)" },
 
@@ -187,7 +139,7 @@ static struct option_help options_help[] = {
 
 	{ "scantime N",
 	  "(-s N) Upper bound on time spent scanning current work,\n"
-	  "\tin seconds. (default: 5)" },
+	  "\tin seconds. (default: 120)" },
 
 #ifdef HAVE_SYSLOG_H
 	{ "syslog",
@@ -215,7 +167,6 @@ static struct option_help options_help[] = {
 };
 
 static struct option options[] = {
-	{ "algo", 1, NULL, 'a' },
 	{ "config", 1, NULL, 'c' },
 	{ "debug", 0, NULL, 'D' },
 	{ "help", 0, NULL, 'h' },
@@ -239,8 +190,6 @@ static struct option options[] = {
 
 struct work {
 	unsigned char	data[128];
-	unsigned char	hash1[64];
-	unsigned char	midstate[32];
 	unsigned char	target[32];
 
 	unsigned char	hash[32];
@@ -270,19 +219,8 @@ static bool jobj_binary(const json_t *obj, const char *key,
 
 static bool work_decode(const json_t *val, struct work *work)
 {
-	if (unlikely(!jobj_binary(val, "midstate",
-			 work->midstate, sizeof(work->midstate)))) {
-		applog(LOG_ERR, "JSON inval midstate");
-		goto err_out;
-	}
-
 	if (unlikely(!jobj_binary(val, "data", work->data, sizeof(work->data)))) {
 		applog(LOG_ERR, "JSON inval data");
-		goto err_out;
-	}
-
-	if (unlikely(!jobj_binary(val, "hash1", work->hash1, sizeof(work->hash1)))) {
-		applog(LOG_ERR, "JSON inval hash1");
 		goto err_out;
 	}
 
@@ -307,7 +245,7 @@ static bool submit_upstream_work(CURL *curl, const struct work *work)
 	bool rc = false;
 
 	/* build hex string */
-	hexstr = bin2hex(work->data, sizeof(work->data));
+	hexstr = bin2hex(work->data, 88);
 	if (unlikely(!hexstr)) {
 		applog(LOG_ERR, "submit_upstream_work OOM");
 		goto out;
@@ -477,15 +415,15 @@ static void *workio_thread(void *userdata)
 static void hashmeter(int thr_id, const struct timeval *diff,
 		      unsigned long hashes_done)
 {
-	double khashes, secs;
+	double hashes, secs;
 
-	khashes = hashes_done / 1000.0;
+	hashes = hashes_done;
 	secs = (double)diff->tv_sec + ((double)diff->tv_usec / 1000000.0);
 
 	if (!opt_quiet)
-		applog(LOG_INFO, "thread %d: %lu hashes, %.2f khash/sec",
+		applog(LOG_INFO, "thread %d: %lu hashes, %.2f hash/min",
 		       thr_id, hashes_done,
-		       khashes / secs);
+		       hashes * 60 / secs);
 }
 
 static bool get_work(struct thr_info *thr, struct work *work)
@@ -547,6 +485,45 @@ err_out:
 	return false;
 }
 
+void CalculateBestBirthdayHash(unsigned char *head, unsigned char *data, volatile unsigned long *restart);
+
+bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint32_t max_nonce, unsigned long *hashes_done)
+{
+	int i;
+	uint32_t *nonce = (uint32_t *)(data + 76);
+	uint32_t n = 0;
+	unsigned long stat_ctr = 0;
+
+	work_restart[thr_id].restart = 0;
+
+	while (1) {
+		unsigned char _hash[32], hash[32];
+		*nonce = n++;
+		SHA256(data, 80, _hash);
+		SHA256(_hash, 32, hash);
+		CalculateBestBirthdayHash((unsigned char *)hash, data, &work_restart[thr_id].restart);
+		stat_ctr++;
+		bool found = true;
+		for (i = 31; i >= 0; i--) {
+			if (hash[i] != target[i]) {
+				found = hash[i] < target[i];
+				break;
+			}
+		}
+		if (found) {
+			applog(LOG_INFO, "Found share %02x%02x%02x%02x", hash[31], hash[30], hash[29], hash[28]);
+			*hashes_done = stat_ctr;
+			return true;
+		} else {
+			applog(LOG_INFO, "Found share %02x%02x%02x%02x: above target", hash[31], hash[30], hash[29], hash[28]);
+		}
+		if ((n >= max_nonce) || work_restart[thr_id].restart) {
+			*hashes_done = stat_ctr;
+			return false;
+		}
+	}
+}
+
 static void *miner_thread(void *userdata)
 {
 	struct thr_info *mythr = userdata;
@@ -581,62 +558,7 @@ static void *miner_thread(void *userdata)
 		hashes_done = 0;
 		gettimeofday(&tv_start, NULL);
 
-		/* scan nonces for a proof-of-work hash */
-		switch (opt_algo) {
-		case ALGO_C:
-			rc = scanhash_c(thr_id, work.midstate, work.data + 64,
-				        work.hash, work.target,
-					max_nonce, &hashes_done);
-			break;
-
-#ifdef WANT_X8664_SSE2
-		case ALGO_SSE2_64: {
-			unsigned int rc5 =
-			        scanhash_sse2_64(thr_id, work.midstate, work.data + 64,
-						 work.hash1, work.hash,
-						 work.target,
-					         max_nonce, &hashes_done);
-			rc = (rc5 == -1) ? false : true;
-			}
-			break;
-#endif
-
-#ifdef WANT_SSE2_4WAY
-		case ALGO_4WAY: {
-			unsigned int rc4 =
-				ScanHash_4WaySSE2(thr_id, work.midstate, work.data + 64,
-						  work.hash1, work.hash,
-						  work.target,
-						  max_nonce, &hashes_done);
-			rc = (rc4 == -1) ? false : true;
-			}
-			break;
-#endif
-
-#ifdef WANT_VIA_PADLOCK
-		case ALGO_VIA:
-			rc = scanhash_via(thr_id, work.data, work.target,
-					  max_nonce, &hashes_done);
-			break;
-#endif
-		case ALGO_CRYPTOPP:
-			rc = scanhash_cryptopp(thr_id, work.midstate, work.data + 64,
-				        work.hash, work.target,
-					max_nonce, &hashes_done);
-			break;
-
-#ifdef WANT_CRYPTOPP_ASM32
-		case ALGO_CRYPTOPP_ASM32:
-			rc = scanhash_asm32(thr_id, work.midstate, work.data + 64,
-				        work.hash, work.target,
-					max_nonce, &hashes_done);
-			break;
-#endif
-
-		default:
-			/* should never happen */
-			goto out;
-		}
+		rc = scanhash(thr_id, work.data, work.target, max_nonce, &hashes_done);
 
 		/* record scanhash elapsed time */
 		gettimeofday(&tv_end, NULL);
@@ -768,17 +690,6 @@ static void parse_arg (int key, char *arg)
 	int v, i;
 
 	switch(key) {
-	case 'a':
-		for (i = 0; i < ARRAY_SIZE(algo_names); i++) {
-			if (algo_names[i] &&
-			    !strcmp(arg, algo_names[i])) {
-				opt_algo = i;
-				break;
-			}
-		}
-		if (i == ARRAY_SIZE(algo_names))
-			show_usage();
-		break;
 	case 'c': {
 		json_error_t err;
 		if (opt_config)
@@ -1006,9 +917,8 @@ int main (int argc, char *argv[])
 	}
 
 	applog(LOG_INFO, "%d miner threads started, "
-		"using SHA256 '%s' algorithm.",
-		opt_n_threads,
-		algo_names[opt_algo]);
+		"using Momentum Proof-of-Work algorithm.",
+		opt_n_threads);
 
 	/* main loop - simply wait for workio thread to exit */
 	pthread_join(thr_info[work_thr_id].pth, NULL);
