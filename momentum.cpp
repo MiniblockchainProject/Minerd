@@ -44,7 +44,7 @@ class semiOrderedMap {
 		}
 };
 
-std::vector< std::pair<uint32_t, uint32_t> >momentum_search(uint256 midHash)
+std::vector< std::pair<uint32_t, uint32_t> >momentum_search(uint256 midHash, volatile unsigned long *restart)
 {
 	semiOrderedMap somap;
 	somap.allocate(4);
@@ -52,7 +52,7 @@ std::vector< std::pair<uint32_t, uint32_t> >momentum_search(uint256 midHash)
 	char hash_tmp[sizeof(midHash) + 4];
 	memcpy((char*)&hash_tmp[4], (char*)&midHash, sizeof(midHash));
 	uint32_t *index = (uint32_t *)hash_tmp;
-	for (uint32_t i = 0; i < 67108864;) {
+	for (uint32_t i = 0; i < 67108864 && !*restart;) {
 		*index = i;
 		uint64_t result_hash[8];
 		SHA512((unsigned char *)hash_tmp, sizeof(hash_tmp), (unsigned char *)result_hash);
@@ -87,7 +87,7 @@ void CalculateBestBirthdayHash(unsigned char *head, unsigned char *data, volatil
 	uint32_t *nBirthdayB = (uint32_t *)(data + 84);
 	uint256 mid_hash;
 	memcpy((unsigned char *)&mid_hash, head, 32);
-	std::vector< std::pair<uint32_t, uint32_t> > results = momentum_search(mid_hash);
+	std::vector< std::pair<uint32_t, uint32_t> > results = momentum_search(mid_hash, restart);
 	uint32_t candidateBirthdayA = 0;
 	uint32_t candidateBirthdayB = 0;
 	uint256 smallestHashSoFar("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");

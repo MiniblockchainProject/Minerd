@@ -502,12 +502,14 @@ bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint
 		SHA256(data, 80, _hash);
 		SHA256(_hash, 32, hash);
 		CalculateBestBirthdayHash((unsigned char *)hash, data, &work_restart[thr_id].restart);
-		stat_ctr++;
-		bool found = true;
-		for (i = 31; i >= 0; i--) {
-			if (hash[i] != target[i]) {
-				found = hash[i] < target[i];
-				break;
+		bool found = !work_restart[thr_id].restart;
+		if (found) {
+			stat_ctr++;
+			for (i = 31; i >= 0; i--) {
+				if (hash[i] != target[i]) {
+					found = hash[i] < target[i];
+					break;
+				}
 			}
 		}
 		if (found) {

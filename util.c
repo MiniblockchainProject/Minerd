@@ -78,19 +78,20 @@ void applog(int prio, const char *fmt, ...)
 		gettimeofday(&tv, NULL);
 
 		pthread_mutex_lock(&time_lock);
-		tm_p = localtime(&tv.tv_sec);
+		tm_p = gmtime(&tv.tv_sec);
 		memcpy(&tm, tm_p, sizeof(tm));
 		pthread_mutex_unlock(&time_lock);
 
 		len = 40 + strlen(fmt) + 2;
 		f = alloca(len);
-		sprintf(f, "[%d-%02d-%02d %02d:%02d:%02d] %s\n",
+		sprintf(f, "[%d-%02d-%02dT%02d:%02d:%02d.%06dZ] %s\n",
 			tm.tm_year + 1900,
 			tm.tm_mon + 1,
 			tm.tm_mday,
 			tm.tm_hour,
 			tm.tm_min,
 			tm.tm_sec,
+			tv.tv_usec,
 			fmt);
 		vfprintf(stderr, f, ap);	/* atomic write to stderr */
 	}
