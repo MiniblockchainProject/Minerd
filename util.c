@@ -293,20 +293,14 @@ json_t *json_rpc_call(CURL *curl, const char *url,
 	 */
 	res_val = json_object_get(val, "result");
 	err_val = json_object_get(val, "error");
-
-	if (!res_val || json_is_null(res_val) ||
-	    (err_val && !json_is_null(err_val))) {
+	if (!res_val || json_is_null(res_val) || (err_val && !(json_is_null(err_val) || json_is_array(err_val) && json_array_size(err_val) >= 1 && json_is_string(json_array_get(err_val, 0))))) {
 		char *s;
-
 		if (err_val)
 			s = json_dumps(err_val, JSON_INDENT(3));
 		else
 			s = strdup("(unknown reason)");
-
 		applog(LOG_ERR, "JSON-RPC call failed: %s", s);
-
 		free(s);
-
 		goto err_out;
 	}
 

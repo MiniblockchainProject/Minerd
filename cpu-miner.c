@@ -240,7 +240,7 @@ err_out:
 static bool submit_upstream_work(CURL *curl, const struct work *work)
 {
 	char *hexstr = NULL;
-	json_t *val, *res;
+	json_t *val, *res, *err;
 	char s[345];
 	bool rc = false;
 
@@ -267,9 +267,15 @@ static bool submit_upstream_work(CURL *curl, const struct work *work)
 	}
 
 	res = json_object_get(val, "result");
+	err = json_object_get(val, "error");
 
-	applog(LOG_INFO, "PROOF OF WORK RESULT: %s",
-	       json_is_true(res) ? "true (yay!!!)" : "false (booooo)");
+	if (json_is_true(res)) {
+		applog(LOG_INFO, "PROOF OF WORK RESULT: Accepted");
+	} else if (json_is_array(err) && json_array_size(err) >= 1 && json_is_string(json_array_get(err, 0))) {
+		applog(LOG_INFO, "PROOF OF WORK RESULT: Rejected (%s)", json_string_value(json_array_get(err, 0)));
+	} else {
+		applog(LOG_INFO, "PROOF OF WORK RESULT: Rejected");
+	}
 
 	json_decref(val);
 
@@ -412,18 +418,13 @@ static void *workio_thread(void *userdata)
 	return NULL;
 }
 
-static void hashmeter(int thr_id, const struct timeval *diff,
-		      unsigned long hashes_done)
+static void hashmeter(int thr_id, const struct timeval *diff, unsigned long hashes_done)
 {
 	double hashes, secs;
-
-	hashes = hashes_done;
+	hashes = hashes_done / 65536.0;
 	secs = (double)diff->tv_sec + ((double)diff->tv_usec / 1000000.0);
-
 	if (!opt_quiet)
-		applog(LOG_INFO, "thread %d: %lu hashes, %.2f hash/min",
-		       thr_id, hashes_done,
-		       hashes * 60 / secs);
+		applog(LOG_INFO, "thread %d: %.3f hash/min", thr_id, hashes * 60 / secs);
 }
 
 static bool get_work(struct thr_info *thr, struct work *work)
@@ -485,14 +486,14 @@ err_out:
 	return false;
 }
 
-void CalculateBestBirthdayHash(unsigned char *head, unsigned char *data, volatile unsigned long *restart);
+uint32_t CalculateBestBirthdayHash(unsigned char *head, unsigned char *data, volatile unsigned long *restart);
 
-bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint32_t max_nonce, unsigned long *hashes_done)
+bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint32_t max_nonce, uint64_t *hashes_done)
 {
 	int i;
 	uint32_t *nonce = (uint32_t *)(data + 76);
 	uint32_t n = 0;
-	unsigned long stat_ctr = 0;
+	uint64_t stat_ctr = 0;
 
 	work_restart[thr_id].restart = 0;
 
@@ -501,10 +502,9 @@ bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint
 		*nonce = n++;
 		SHA256(data, 80, _hash);
 		SHA256(_hash, 32, hash);
-		CalculateBestBirthdayHash((unsigned char *)hash, data, &work_restart[thr_id].restart);
+		stat_ctr += CalculateBestBirthdayHash((unsigned char *)hash, data, &work_restart[thr_id].restart);
 		bool found = !work_restart[thr_id].restart;
 		if (found) {
-			stat_ctr++;
 			for (i = 31; i >= 0; i--) {
 				if (hash[i] != target[i]) {
 					found = hash[i] < target[i];
@@ -513,7 +513,7 @@ bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint
 			}
 		}
 		if (found) {
-			applog(LOG_INFO, "Found share %02x%02x%02x%02x", hash[31], hash[30], hash[29], hash[28]);
+			applog(LOG_INFO, "Found share %02x%02x%02x%02x: submitting", hash[31], hash[30], hash[29], hash[28]);
 			*hashes_done = stat_ctr;
 			return true;
 		} else {
@@ -545,7 +545,7 @@ static void *miner_thread(void *userdata)
 
 	while (1) {
 		struct work work __attribute__((aligned(128)));
-		unsigned long hashes_done;
+		uint64_t hashes_done;
 		struct timeval tv_start, tv_end, diff;
 		uint64_t max64;
 		bool rc;
@@ -573,7 +573,7 @@ static void *miner_thread(void *userdata)
 			diff.tv_sec++;
 		if (diff.tv_sec > 0) {
 			max64 =
-			   ((uint64_t)hashes_done * opt_scantime) / diff.tv_sec;
+			   (hashes_done / 65536 * opt_scantime) / diff.tv_sec;
 			if (max64 > 0xfffffffaULL)
 				max64 = 0xfffffffaULL;
 			max_nonce = max64;
