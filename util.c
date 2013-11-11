@@ -78,20 +78,17 @@ void applog(int prio, const char *fmt, ...)
 		gettimeofday(&tv, NULL);
 
 		pthread_mutex_lock(&time_lock);
-		tm_p = gmtime(&tv.tv_sec);
+		time_t tv_sec = tv.tv_sec;
+		tm_p = localtime(&tv_sec);
 		memcpy(&tm, tm_p, sizeof(tm));
 		pthread_mutex_unlock(&time_lock);
 
-		len = 40 + strlen(fmt) + 2;
+		len = strlen(fmt) + 13;
 		f = alloca(len);
-		sprintf(f, "[%d-%02d-%02dT%02d:%02d:%02d.%06dZ] %s\n",
-			tm.tm_year + 1900,
-			tm.tm_mon + 1,
-			tm.tm_mday,
+		sprintf(f, "[%02d:%02d:%02d] %s\n",
 			tm.tm_hour,
 			tm.tm_min,
 			tm.tm_sec,
-			tv.tv_usec,
 			fmt);
 		vfprintf(stderr, f, ap);	/* atomic write to stderr */
 	}
@@ -262,7 +259,7 @@ json_t *json_rpc_call(CURL *curl, const char *url,
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
 	rc = curl_easy_perform(curl);
-	if (rc) {
+	if (rc || !all_data.buf) {
 		applog(LOG_ERR, "HTTP request failed: %s", curl_err_str);
 		goto err_out;
 	}

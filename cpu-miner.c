@@ -88,7 +88,7 @@ bool have_longpoll = false;
 bool use_syslog = false;
 static bool opt_quiet = false;
 static int opt_retries = 10;
-static int opt_fail_pause = 30;
+static int opt_fail_pause = 10;
 int opt_scantime = 120;
 static json_t *opt_config;
 static const bool opt_time = true;
@@ -135,7 +135,7 @@ static struct option_help options_help[] = {
 
 	{ "retry-pause N",
 	  "(-R N) Number of seconds to pause, between retries\n"
-	  "\t(default: 30)" },
+	  "\t(default: 10)" },
 
 	{ "scantime N",
 	  "(-s N) Upper bound on time spent scanning current work,\n"
@@ -650,9 +650,9 @@ static void *longpoll_thread(void *userdata)
 			restart_threads();
 		} else {
 			if (failures++ < 10) {
-				sleep(30);
+				sleep(10);
 				applog(LOG_ERR,
-					"longpoll failed, sleeping for 30s");
+					"longpoll failed, sleeping for 10s");
 			} else {
 				applog(LOG_ERR,
 					"longpoll failed, ending thread");
@@ -844,6 +844,8 @@ int main (int argc, char *argv[])
 	/* parse command line */
 	parse_cmdline(argc, argv);
 
+	pthread_mutex_init(&time_lock, NULL);
+
 	if (!rpc_userpass) {
 		if (!rpc_user || !rpc_pass) {
 			applog(LOG_ERR, "No login credentials supplied");
@@ -854,8 +856,6 @@ int main (int argc, char *argv[])
 			return 1;
 		sprintf(rpc_userpass, "%s:%s", rpc_user, rpc_pass);
 	}
-
-	pthread_mutex_init(&time_lock, NULL);
 
 #ifdef HAVE_SYSLOG_H
 	if (use_syslog)
