@@ -877,9 +877,12 @@ int main (int argc, char *argv[])
 	pthread_mutex_init(&time_lock, NULL);
 
 	if (!rpc_userpass) {
-		if (!rpc_user || !rpc_pass) {
+		if (!rpc_user) {
 			applog(LOG_ERR, "No login credentials supplied");
 			return 1;
+		}
+		if (!rpc_pass) {
+			rpc_pass = strdup("x");
 		}
 		rpc_userpass = malloc(strlen(rpc_user) + strlen(rpc_pass) + 2);
 		if (!rpc_userpass)
