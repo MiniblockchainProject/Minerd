@@ -5,10 +5,12 @@
 
 #include <windows.h>
 
+#ifndef __MINGW32__
 static inline void sleep(int secs)
 {
 	Sleep(secs * 1000);
 }
+#endif
 
 enum {
 	PRIO_PROCESS		= 0,

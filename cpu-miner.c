@@ -93,6 +93,7 @@ int opt_scantime = 120;
 static json_t *opt_config;
 static const bool opt_time = true;
 static int opt_n_threads;
+static int opt_n_threads_mmc;
 static int num_processors;
 static char *rpc_url;
 static char *rpc_userpass;
@@ -103,6 +104,7 @@ int longpoll_thr_id;
 struct work_restart *work_restart = NULL;
 pthread_mutex_t time_lock;
 
+char *scratchpad;
 
 struct option_help {
 	const char	*name;
@@ -147,7 +149,7 @@ static struct option_help options_help[] = {
 #endif
 
 	{ "threads N",
-	  "(-t N) Number of miner threads (default: 1)" },
+	  "(-t N) Number of miner threads (default: 1, valid: 1,2,4,8,16..256)" },
 
 	{ "url URL",
 	  "URL for bitcoin JSON-RPC server "
@@ -424,7 +426,8 @@ static void hashmeter(int thr_id, const struct timeval *diff, unsigned long hash
 	hashes = hashes_done / 65536.0;
 	secs = (double)diff->tv_sec + ((double)diff->tv_usec / 1000000.0);
 	if (!opt_quiet)
-		applog(LOG_INFO, "thread %d: %.3f hash/min", thr_id, hashes * 60 / secs);
+		// applog(LOG_INFO, "thread %d: %.3f hash/min", thr_id, hashes * 60 / secs);
+		applog(LOG_INFO, "Stats: %.3f hash/min", hashes_done * 60 / secs);
 }
 
 static bool get_work(struct thr_info *thr, struct work *work)
@@ -486,7 +489,7 @@ err_out:
 	return false;
 }
 
-uint32_t CalculateBestBirthdayHash(unsigned char *head, unsigned char *data, volatile unsigned long *restart);
+uint32_t CalculateBestBirthdayHash(unsigned char *head, unsigned char *data, char *scratchpad, int totalThreads, volatile unsigned long *restart);
 
 bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint32_t max_nonce, uint64_t *hashes_done)
 {
@@ -502,7 +505,8 @@ bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint
 		*nonce = n++;
 		SHA256(data, 80, _hash);
 		SHA256(_hash, 32, hash);
-		stat_ctr += CalculateBestBirthdayHash((unsigned char *)hash, data, &work_restart[thr_id].restart);
+		/*stat_ctr += -- MMC */ CalculateBestBirthdayHash((unsigned char *)hash, data, scratchpad, opt_n_threads_mmc, &work_restart[thr_id].restart);
+		stat_ctr += 1;
 		bool found = !work_restart[thr_id].restart;
 		if (found) {
 			for (i = 31; i >= 0; i--) {
@@ -513,16 +517,21 @@ bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint
 			}
 		}
 		if (found) {
-			applog(LOG_INFO, "Found share %02x%02x%02x%02x: submitting", hash[31], hash[30], hash[29], hash[28]);
+			applog(LOG_INFO, "Found share ...%02x%02x%02x%02x%02x%02x%02x%02x: submitting", 
+				hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]);
 			*hashes_done = stat_ctr;
 			return true;
 		} else {
-			applog(LOG_DEBUG, "Found share %02x%02x%02x%02x: above target", hash[31], hash[30], hash[29], hash[28]);
+			if (opt_debug)
+				applog(LOG_DEBUG, "Found share ...%02x%02x%02x%02x%02x%02x%02x%02x: above target", 
+					hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]);
 		}
-		if ((n >= max_nonce) || work_restart[thr_id].restart) {
+
+		// MMC scans only once
+		// if ((n >= max_nonce) || work_restart[thr_id].restart) {
 			*hashes_done = stat_ctr;
 			return false;
-		}
+		// }
 	}
 }
 
@@ -746,7 +755,11 @@ static void parse_arg (int key, char *arg)
 		if (v < 1 || v > 9999)	/* sanity check */
 			show_usage();
 
+		if (v != 1 && v != 2 && v != 4 && v != 8 && v != 16 && v != 32 && v != 64 && v != 128 && v != 256)
+			show_usage();
+
 		opt_n_threads = v;
+		opt_n_threads_mmc = v;
 		break;
 	case 'u':
 		free(rpc_user);
@@ -785,6 +798,23 @@ static void parse_arg (int key, char *arg)
 	if (!opt_n_threads)
 		opt_n_threads = num_processors;
 #endif /* !WIN32 */
+
+	// MMC
+	opt_n_threads = 1;
+
+#ifdef WIN32
+	if (!opt_n_threads_mmc)
+		opt_n_threads_mmc = 1;
+#else
+	num_processors = sysconf(_SC_NPROCESSORS_ONLN);
+	if (!opt_n_threads_mmc)
+		opt_n_threads_mmc = num_processors;
+#endif /* !WIN32 */
+
+	if (opt_n_threads_mmc != 1 && opt_n_threads_mmc != 2 && opt_n_threads_mmc != 4 && 
+		opt_n_threads_mmc != 8 && opt_n_threads_mmc != 16 && opt_n_threads_mmc != 32 && 
+		opt_n_threads_mmc != 64 && opt_n_threads_mmc != 128 && opt_n_threads_mmc != 256)
+		opt_n_threads_mmc = 1;
 }
 
 static void parse_config(void)
@@ -901,6 +931,9 @@ int main (int argc, char *argv[])
 	} else
 		longpoll_thr_id = -1;
 
+	// MMC scratchpad
+	scratchpad = (char *)malloc(1<<30);
+
 	/* start mining threads */
 	for (i = 0; i < opt_n_threads; i++) {
 		thr = &thr_info[i];
@@ -919,11 +952,13 @@ int main (int argc, char *argv[])
 	}
 
 	applog(LOG_INFO, "%d miner threads started, "
-		"using Momentum Proof-of-Work algorithm.",
-		opt_n_threads);
+		"using MMC Momentum Proof-of-Work algorithm.",
+		opt_n_threads_mmc);
 
 	/* main loop - simply wait for workio thread to exit */
 	pthread_join(thr_info[work_thr_id].pth, NULL);
+
+	free(scratchpad);
 
 	applog(LOG_INFO, "workio thread dead, exiting.");
 
