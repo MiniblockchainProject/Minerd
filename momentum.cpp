@@ -3,14 +3,12 @@
 #include <uint256.h>
 #include <vector>
 
+#include <pthread.h>
+
 #include <iostream>
 #include <openssl/sha.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
-
-#include <boost/unordered_map.hpp>
-#include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/thread/thread.hpp> 
 
 extern "C" {
 	void applog(int prio, const char *fmt, ...);
@@ -32,8 +30,23 @@ uint32_t chunks=(1<<(PSUEDORANDOM_DATA_SIZE-PSUEDORANDOM_DATA_CHUNK_SIZE));
 uint32_t chunkSize=(1<<(PSUEDORANDOM_DATA_CHUNK_SIZE));
 uint32_t comparisonSize=(1<<(PSUEDORANDOM_DATA_SIZE-L2CACHE_TARGET));
 
-void static SHA512Filler(char *mainMemoryPsuedoRandomData, int threadNumber, int totalThreads,uint256 midHash, char* isComplete, volatile unsigned long *restart){
-	
+typedef struct {
+    char *mainMemoryPsuedoRandomData;
+    int threadNumber;
+    int totalThreads;
+    uint256 midHash;
+    volatile unsigned long *restart; // TODO
+} SHA512FillerArgs_t;
+
+static void *SHA512Filler(void *pargs){
+	// Thread arguments
+	SHA512FillerArgs_t *args = (SHA512FillerArgs_t *)pargs;
+
+	char *mainMemoryPsuedoRandomData = args->mainMemoryPsuedoRandomData;
+    int threadNumber = args->threadNumber;
+    int totalThreads = args->totalThreads;
+    uint256 midHash = args->midHash;
+    volatile unsigned long *restart = args->restart;
 	
 	//Generate psuedo random data to store in main memory
 	unsigned char hash_tmp[sizeof(midHash)];
@@ -56,10 +69,28 @@ void static SHA512Filler(char *mainMemoryPsuedoRandomData, int threadNumber, int
 			}
 		}*/
 	}
-	isComplete[threadNumber]=1;
+
+	return NULL;
 }
 
-void static aesSearch(char *mainMemoryPsuedoRandomData, int threadNumber, int totalThreads, char* isComplete, std::vector< std::pair<uint32_t,uint32_t> > *results, volatile unsigned long *restart){
+typedef struct {
+    char *mainMemoryPsuedoRandomData;
+    int threadNumber;
+    int totalThreads;
+    std::vector< std::pair<uint32_t,uint32_t> > *results;
+    volatile unsigned long *restart; // TODO
+} aesSearch_t;
+
+static void *aesSearch(void *pargs){
+	// Thread arguments
+	aesSearch_t *args = (aesSearch_t *)pargs;
+
+	char *mainMemoryPsuedoRandomData = args->mainMemoryPsuedoRandomData;
+    int threadNumber = args->threadNumber;
+    int totalThreads = args->totalThreads;
+    std::vector< std::pair<uint32_t,uint32_t> > *results = args->results;
+    volatile unsigned long *restart = args->restart;
+
 	//Allocate temporary memory
 	unsigned char *cacheMemoryOperatingData;
 	unsigned char *cacheMemoryOperatingData2;	
@@ -145,7 +176,8 @@ void static aesSearch(char *mainMemoryPsuedoRandomData, int threadNumber, int to
 	//free memory
 	delete [] cacheMemoryOperatingData;
 	delete [] cacheMemoryOperatingData2;
-	isComplete[threadNumber]=1;
+
+	return NULL;
 }
 
 std::vector< std::pair<uint32_t,uint32_t> > momentum_search( uint256 midHash, char *mainMemoryPsuedoRandomData, int totalThreads, volatile unsigned long *restart){
@@ -160,43 +192,49 @@ std::vector< std::pair<uint32_t,uint32_t> > momentum_search( uint256 midHash, ch
 	//results=NULL;
 	
 	//clock_t t1 = clock();
-	boost::thread_group* sha512Threads = new boost::thread_group();
-	char *threadsComplete;
-	threadsComplete=new char[totalThreads];
+	pthread_t *threads = new pthread_t[totalThreads];
+	SHA512FillerArgs_t *sha512ThreadsArgs=new SHA512FillerArgs_t[totalThreads];
 	for (int i = 0; i < totalThreads; i++){
-		sha512Threads->create_thread(boost::bind(&SHA512Filler, mainMemoryPsuedoRandomData, i,totalThreads,midHash,threadsComplete,restart));
+		sha512ThreadsArgs[i].mainMemoryPsuedoRandomData = mainMemoryPsuedoRandomData;
+		sha512ThreadsArgs[i].totalThreads = totalThreads;
+		sha512ThreadsArgs[i].threadNumber = i;
+		sha512ThreadsArgs[i].midHash = midHash;
+		sha512ThreadsArgs[i].restart = restart;
+
+		memset(&threads[i], 0, sizeof(pthread_t));
+		pthread_create(&threads[i], NULL, SHA512Filler, &sha512ThreadsArgs[i]);
 	}
+
 	//Wait for all threads to complete
-	int complete=0;
-	do{
-		boost::this_thread::sleep(boost::posix_time::milliseconds(100));
-		complete=0;
-		for(int i=0;i<totalThreads;i++){
-			if (threadsComplete[i]==1){
-				complete++;
-			}
-		}
-	}while(complete!=totalThreads);
+	for (int i = 0; i < totalThreads; i++){
+		pthread_join(threads[i], NULL);
+	}
+	delete[] sha512ThreadsArgs;
+	delete[] threads;
 	
 	//clock_t t2 = clock();
 	//printf("create psuedorandom data %f\n",(float)t2-(float)t1);
 
-	boost::thread_group* aesThreads = new boost::thread_group();
-	threadsComplete=new char[totalThreads];
+	threads = new pthread_t[totalThreads];
+	aesSearch_t *aesThreadsArgs=new aesSearch_t[totalThreads];
 	for (int i = 0; i < totalThreads; i++){
-		aesThreads->create_thread(boost::bind(&aesSearch, mainMemoryPsuedoRandomData, i,totalThreads,threadsComplete,&results,restart));
-	}
-	//Wait for all threads to complete
-	do{
-		boost::this_thread::sleep(boost::posix_time::milliseconds(100));
-		complete=0;
-		for(int i=0;i<totalThreads;i++){
-			if (threadsComplete[i]==1){
-				complete++;
-			}
-		}
-	}while(complete!=totalThreads);
+		aesThreadsArgs[i].mainMemoryPsuedoRandomData = mainMemoryPsuedoRandomData;
+		aesThreadsArgs[i].totalThreads = totalThreads;
+		aesThreadsArgs[i].threadNumber = i;
+		aesThreadsArgs[i].results = &results;
+		aesThreadsArgs[i].restart = restart;
 
+		memset(&threads[i], 0, sizeof(pthread_t));
+		pthread_create(&threads[i], NULL, aesSearch, &aesThreadsArgs[i]);
+	}
+
+	//Wait for all threads to complete
+	for (int i = 0; i < totalThreads; i++){
+		pthread_join(threads[i], NULL);
+	}
+
+	delete[] aesThreadsArgs;
+	delete[] threads;
 	
 	//clock_t t3 = clock();
 	//printf("comparisons %f\n",(float)t3-(float)t2);
