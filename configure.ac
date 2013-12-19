@@ -44,6 +44,10 @@ esac
 AC_CHECK_LIB(jansson, json_loads, request_jansson=false, request_jansson=true)
 AC_CHECK_LIB(pthread, pthread_create, PTHREAD_LIBS=-lpthread)
 
+AC_CHECK_HEADERS([openssl/evp.h],[],[AC_MSG_ERROR([OpenSSL headers required])])
+AC_CHECK_LIB([ssl],[SSL_library_init], [], [AC_MSG_ERROR([OpenSSL library required])])
+AC_CHECK_LIB([crypto],[EVP_DigestFinal_ex], [], [AC_MSG_ERROR([OpenSSL library required])])
+
 AM_CONDITIONAL([WANT_JANSSON], [test x$request_jansson = xtrue])
 AM_CONDITIONAL([HAVE_WINDOWS], [test x$have_win32 = xtrue])
 AM_CONDITIONAL([HAVE_x86_64], [test x$have_x86_64 = xtrue])
@@ -85,9 +89,9 @@ if test "x$YASM" != "xfalse" ; then
     AC_MSG_RESULT([no])
   fi
 fi
-if test "x$has_yasm" = "xfalse" ; then
-  AC_MSG_NOTICE([yasm is required for the sse2_64 algorithm. It will be skipped.])
-fi
+# if test "x$has_yasm" = "xfalse" ; then
+#    AC_MSG_NOTICE([yasm is required for the sse2_64 algorithm. It will be skipped.])
+# fi
 
 AM_CONDITIONAL([HAS_YASM], [test x$has_yasm = xtrue])
 
