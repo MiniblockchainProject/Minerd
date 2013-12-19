@@ -87,7 +87,7 @@ bool want_longpoll = true;
 bool have_longpoll = false;
 bool use_syslog = false;
 static bool opt_quiet = false;
-static int opt_retries = 10;
+static int opt_retries = INT_MAX; // default: almost infinite retries
 static int opt_fail_pause = 10;
 int opt_scantime = 120;
 static json_t *opt_config;
