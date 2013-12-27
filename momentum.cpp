@@ -162,7 +162,7 @@ static void *aesSearch(void *pargs){
 			EVP_EncryptFinal(&ctx, cacheMemoryOperatingData + outlen1, &outlen2);
 			EVP_CIPHER_CTX_cleanup(&ctx);
 			if (*restart)
-			    goto out;
+			    break;
 			//printf("length: %d\n", sizeof(cacheMemoryOperatingData2));
 		}
 		
@@ -177,7 +177,6 @@ static void *aesSearch(void *pargs){
 		}
 	}
 	
-out:
 	//free memory
 	delete [] cacheMemoryOperatingData;
 	delete [] cacheMemoryOperatingData2;
