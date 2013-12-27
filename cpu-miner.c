@@ -755,8 +755,8 @@ static void parse_arg (int key, char *arg)
 		if (v < 1 || v > 9999)	/* sanity check */
 			show_usage();
 
-		if (!(v & (v - 1)))
-			show_usage();
+//		if (v & (v - 1))
+//			show_usage();
 
 		opt_n_threads = v;
 		opt_n_threads_mmc = v;
@@ -811,7 +811,7 @@ static void parse_arg (int key, char *arg)
 		opt_n_threads_mmc = num_processors;
 #endif /* !WIN32 */
 
-	if (!(opt_n_threads_mmc & (opt_n_threads_mmc - 1))) // check for power of 2
+	if (opt_n_threads_mmc & (opt_n_threads_mmc - 1)) // check for power of 2
 	{
 	    // round to the next power of 2
 		opt_n_threads_mmc--;
