@@ -59,6 +59,8 @@ static void *SHA512Filler(void *pargs){
 	for( uint32_t i = startChunk; i < startChunk+chunksToProcess;  i++){
 		*index = i;
 		SHA512((unsigned char*)hash_tmp, sizeof(hash_tmp), (unsigned char*)&(mainMemoryPsuedoRandomData[i*chunkSize]));
+		if(*restart)
+		    return NULL;
 		//This can take a while, so check periodically to see if we need to kill the thread
 		/*if(i%100000==0){
 			try{
@@ -93,7 +95,7 @@ static void *aesSearch(void *pargs){
 
 	//Allocate temporary memory
 	unsigned char *cacheMemoryOperatingData;
-	unsigned char *cacheMemoryOperatingData2;	
+	unsigned char *cacheMemoryOperatingData2;
 	cacheMemoryOperatingData=new unsigned char[cacheMemorySize+16];
 	cacheMemoryOperatingData2=new unsigned char[cacheMemorySize];
 
@@ -159,6 +161,8 @@ static void *aesSearch(void *pargs){
 			EVP_EncryptUpdate(&ctx, cacheMemoryOperatingData, &outlen1, cacheMemoryOperatingData2, cacheMemorySize);
 			EVP_EncryptFinal(&ctx, cacheMemoryOperatingData + outlen1, &outlen2);
 			EVP_CIPHER_CTX_cleanup(&ctx);
+			if (*restart)
+			    goto out;
 			//printf("length: %d\n", sizeof(cacheMemoryOperatingData2));
 		}
 		
@@ -173,10 +177,10 @@ static void *aesSearch(void *pargs){
 		}
 	}
 	
+out:
 	//free memory
 	delete [] cacheMemoryOperatingData;
 	delete [] cacheMemoryOperatingData2;
-
 	return NULL;
 }
 
@@ -211,31 +215,32 @@ std::vector< std::pair<uint32_t,uint32_t> > momentum_search( uint256 midHash, ch
 	}
 	delete[] sha512ThreadsArgs;
 	delete[] threads;
-	
+
 	//clock_t t2 = clock();
 	//printf("create psuedorandom data %f\n",(float)t2-(float)t1);
 
-	threads = new pthread_t[totalThreads];
-	aesSearch_t *aesThreadsArgs=new aesSearch_t[totalThreads];
-	for (int i = 0; i < totalThreads; i++){
-		aesThreadsArgs[i].mainMemoryPsuedoRandomData = mainMemoryPsuedoRandomData;
-		aesThreadsArgs[i].totalThreads = totalThreads;
-		aesThreadsArgs[i].threadNumber = i;
-		aesThreadsArgs[i].results = &results;
-		aesThreadsArgs[i].restart = restart;
+    if (!*restart) {
+        threads = new pthread_t[totalThreads];
+        aesSearch_t *aesThreadsArgs=new aesSearch_t[totalThreads];
+        for (int i = 0; i < totalThreads; i++){
+            aesThreadsArgs[i].mainMemoryPsuedoRandomData = mainMemoryPsuedoRandomData;
+            aesThreadsArgs[i].totalThreads = totalThreads;
+            aesThreadsArgs[i].threadNumber = i;
+            aesThreadsArgs[i].results = &results;
+            aesThreadsArgs[i].restart = restart;
 
-		memset(&threads[i], 0, sizeof(pthread_t));
-		pthread_create(&threads[i], NULL, aesSearch, &aesThreadsArgs[i]);
+            memset(&threads[i], 0, sizeof(pthread_t));
+            pthread_create(&threads[i], NULL, aesSearch, &aesThreadsArgs[i]);
+        }
+
+        //Wait for all threads to complete
+        for (int i = 0; i < totalThreads; i++){
+            pthread_join(threads[i], NULL);
+        }
+        delete[] aesThreadsArgs;
+        delete[] threads;
 	}
 
-	//Wait for all threads to complete
-	for (int i = 0; i < totalThreads; i++){
-		pthread_join(threads[i], NULL);
-	}
-
-	delete[] aesThreadsArgs;
-	delete[] threads;
-	
 	//clock_t t3 = clock();
 	//printf("comparisons %f\n",(float)t3-(float)t2);
 	return results;
