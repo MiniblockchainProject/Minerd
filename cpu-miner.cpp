@@ -117,6 +117,7 @@ static bool opt_quiet = false;
 static int opt_retries = INT_MAX; // default: almost infinite retries
 static int opt_fail_pause = 10;
 int opt_scantime = 1;
+uint32_t opt_extranonce = 0;
 static json_t *opt_config;
 static const bool opt_time = true;
 static int opt_n_threads;
@@ -177,6 +178,9 @@ static struct option_help options_help[] = {
 	{ "threads N",
 	  "(-t N) Number of miner threads (default: 1, valid: 1,2,4,8,16..256)" },
 
+	{ "extranonce",
+	   "(-e N) Extranonce to displace miners using the same getwork server" },
+
 	{ "url URL",
 	  "URL for bitcoin JSON-RPC server "
 	  "(default: " DEF_RPC_URL ")" },
@@ -206,6 +210,7 @@ static struct option options[] = {
 	{ "retries", 1, NULL, 'r' },
 	{ "retry-pause", 1, NULL, 'R' },
 	{ "scantime", 1, NULL, 's' },
+        { "extranonce", 1, NULL, 'e'},
 #ifdef HAVE_SYSLOG_H
 	{ "syslog", 0, NULL, 1004 },
 #endif
@@ -344,7 +349,7 @@ static bool get_upstream_work(CURL *curl, struct work *work)
 
 	rc = work_decode(json_object_get(val, "result"), work);
     
-        //printf("%ld %s\n", work->data.nHeight, work->target.GetHex().c_str());
+        //printf("%ld %ld %s\n", work->data.nHeight, work->data.nTime, work->target.GetHex().c_str());
 
 	json_decref(val);
 
@@ -540,10 +545,13 @@ bool scanhash(int thr_id, CBlockHeader *header, uint256 target, uint32_t max_non
 
 	work_restart[thr_id].restart = 0;
 
-	while (1) {
-		header->nNonce = (((uint64_t)thr_id) << (48)) + n++;
+        struct hash_context ctx;
+        HashInit(ctx);
 
-		uint256 hash = Hash7(BEGIN(header->hashPrevBlock), END(header->nVersion));
+	while (1) {
+		header->nNonce = (((uint64_t)thr_id) << 24) + ((uint64_t)opt_extranonce << 32) + n++;
+		//printf("%d %lX\n", opt_extranonce, header->nNonce);
+		uint256 hash = Hash7(ctx,BEGIN(header->hashPrevBlock), END(header->nVersion));
 
 		stat_ctr += 1;
 		bool found = hash < target;
@@ -748,6 +756,8 @@ static void parse_arg (int key, char *arg)
 	case 'q':
 		opt_quiet = true;
 		break;
+        case 'e' :
+		opt_extranonce = atoi(arg);
 	case 'D':
 		opt_debug = true;
 		break;
@@ -945,9 +955,6 @@ int main (int argc, char *argv[])
 		}
 	} else
 		longpoll_thr_id = -1;
-
-	// MMC scratchpad
-	scratchpad = (char *)malloc(1<<30);
 
 	/* start mining threads */
 	for (i = 0; i < opt_n_threads; i++) {

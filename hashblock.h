@@ -50,9 +50,7 @@ GLOBAL sph_ripemd160_context  z_ripemd;
 #define ZTIGER (memcpy(&ctx_tiger, &z_tiger, sizeof(z_tiger)))
 #define ZRIPEMD (memcpy(&ctx_ripemd, &z_ripemd, sizeof(z_ripemd)))
 
-template<typename T1>
-inline uint256 Hash7(const T1 pbegin, const T1 pend)
-{
+struct hash_context {
     sph_sha256_context       ctx_sha256;
     sph_sha512_context       ctx_sha512;
     sph_keccak512_context    ctx_keccak;
@@ -60,6 +58,22 @@ inline uint256 Hash7(const T1 pbegin, const T1 pend)
     sph_haval256_5_context   ctx_haval;
     sph_tiger_context        ctx_tiger;
     sph_ripemd160_context    ctx_ripemd;
+    mpz_t bns[7];
+    mpz_t product;
+    char data[4096];
+};
+
+void HashInit(hash_context &h){
+    for(int i=0; i < 7; i++){
+	mpz_init(h.bns[i]);
+    }
+    mpz_init(h.product);
+}
+
+
+template<typename T1>
+inline uint256 Hash7(hash_context &h, const T1 pbegin, const T1 pend)
+{
     static unsigned char pblank[1];
 
 #ifndef QT_NO_DEBUG
@@ -75,78 +89,67 @@ inline uint256 Hash7(const T1 pbegin, const T1 pend)
     const void* ptr = (pbegin == pend ? pblank : static_cast<const void*>(&pbegin[0]));
     size_t sz = (pend - pbegin) * sizeof(pbegin[0]);
 
-    sph_sha256_init(&ctx_sha256);
+    sph_sha256_init(&h.ctx_sha256);
     // ZSHA256;
-    sph_sha256 (&ctx_sha256, ptr, sz);
-    sph_sha256_close(&ctx_sha256, static_cast<void*>(&hash[0]));
+    sph_sha256 (&h.ctx_sha256, ptr, sz);
+    sph_sha256_close(&h.ctx_sha256, static_cast<void*>(&hash[0]));
     
-    sph_sha512_init(&ctx_sha512);
+    sph_sha512_init(&h.ctx_sha512);
     // ZSHA512;
-    sph_sha512 (&ctx_sha512, ptr, sz);
-    sph_sha512_close(&ctx_sha512, static_cast<void*>(&hash[1]));
+    sph_sha512 (&h.ctx_sha512, ptr, sz);
+    sph_sha512_close(&h.ctx_sha512, static_cast<void*>(&hash[1]));
     
-    sph_keccak512_init(&ctx_keccak);
+    sph_keccak512_init(&h.ctx_keccak);
     // ZKECCAK;
-    sph_keccak512 (&ctx_keccak, ptr, sz);
-    sph_keccak512_close(&ctx_keccak, static_cast<void*>(&hash[2]));
+    sph_keccak512 (&h.ctx_keccak, ptr, sz);
+    sph_keccak512_close(&h.ctx_keccak, static_cast<void*>(&hash[2]));
 
-    sph_whirlpool_init(&ctx_whirlpool);
+    sph_whirlpool_init(&h.ctx_whirlpool);
     // ZWHIRLPOOL;
-    sph_whirlpool (&ctx_whirlpool, ptr, sz);
-    sph_whirlpool_close(&ctx_whirlpool, static_cast<void*>(&hash[3]));
+    sph_whirlpool (&h.ctx_whirlpool, ptr, sz);
+    sph_whirlpool_close(&h.ctx_whirlpool, static_cast<void*>(&hash[3]));
     
-    sph_haval256_5_init(&ctx_haval);
+    sph_haval256_5_init(&h.ctx_haval);
     // ZHAVAL;
-    sph_haval256_5 (&ctx_haval, ptr, sz);
-    sph_haval256_5_close(&ctx_haval, static_cast<void*>(&hash[4]));
+    sph_haval256_5 (&h.ctx_haval, ptr, sz);
+    sph_haval256_5_close(&h.ctx_haval, static_cast<void*>(&hash[4]));
 
-    sph_tiger_init(&ctx_tiger);
+    sph_tiger_init(&h.ctx_tiger);
     // ZTIGER;
-    sph_tiger (&ctx_tiger, ptr, sz);
-    sph_tiger_close(&ctx_tiger, static_cast<void*>(&hash[5]));
+    sph_tiger (&h.ctx_tiger, ptr, sz);
+    sph_tiger_close(&h.ctx_tiger, static_cast<void*>(&hash[5]));
 
 #if 1
-    sph_ripemd160_init(&ctx_ripemd);
+    sph_ripemd160_init(&h.ctx_ripemd);
     // ZRIPEMD;
-    sph_ripemd160 (&ctx_ripemd, ptr, sz);
-    sph_ripemd160_close(&ctx_ripemd, static_cast<void*>(&hash[6]));
+    sph_ripemd160 (&h.ctx_ripemd, ptr, sz);
+    sph_ripemd160_close(&h.ctx_ripemd, static_cast<void*>(&hash[6]));
 
     //printf("%s\n", hash[6].GetHex().c_str());
 #endif
-    mpz_t bns[7];
 
     //Take care of zeros and load gmp
     for(int i=0; i < 7; i++){
 	if(hash[i]==0)
 	    hash[i] = 1;
-	mpz_init(bns[i]);
-	mpz_set_uint512(bns[i],hash[i]);
+	mpz_set_uint512(h.bns[i],hash[i]);
     }
  
-    mpz_t product;
-    mpz_init(product);
-    mpz_set_ui(product,1);
+    mpz_set_ui(h.product,1);
     for(int i=0; i < 7; i++){
-	mpz_mul(product,product,bns[i]);
+	mpz_mul(h.product,h.product,h.bns[i]);
     }
 
-    int bytes = mpz_sizeinbase(product, 256);
-    char *data = (char*)malloc(bytes);
-    mpz_export(data, NULL, -1, 1, 0, 0, product);
+    int bytes = mpz_sizeinbase(h.product, 256);
+    mpz_export(h.data, NULL, -1, 1, 0, 0, h.product);
 
     //Free the memory
-    for(int i=0; i < 7; i++){
-	mpz_clear(bns[i]);
-    }
-    mpz_clear(product);
 
-    sph_sha256_init(&ctx_sha256);
+    sph_sha256_init(&h.ctx_sha256);
     // ZSHA256;
-    sph_sha256 (&ctx_sha256, data,bytes);
-    sph_sha256_close(&ctx_sha256, static_cast<void*>(&finalhash));
+    sph_sha256 (&h.ctx_sha256, h.data,bytes);
+    sph_sha256_close(&h.ctx_sha256, static_cast<void*>(&finalhash));
 
-
-    free(data);
     return finalhash;
 }
 

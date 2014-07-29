@@ -2,11 +2,12 @@
 	"_comment1" : "Any long-format command line argument ",
 	"_comment2" : "may be used in this JSON configuration file",
 
-	"url" : "http://127.0.0.1:8252",
+	"url" : "http://127.0.0.1:8345",
 	"user" : "cryptoniterpc",
-	"pass" : "pass",
+	"pass" : "4qxokAmRyBVK9s545aJtLGzBr2BRgPxjZ3iFQUj299Hm",
 
 	"algo" : "sse2_64",
-	"threads" : "8",
-	"quiet" : "false"
+	"threads" : "1",
+	"quiet" : "false",	
+        "extranonce" : "1"
 }
