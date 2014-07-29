@@ -2,12 +2,11 @@
 	"_comment1" : "Any long-format command line argument ",
 	"_comment2" : "may be used in this JSON configuration file",
 
-	"url" : "http://127.0.0.1:8332",
-	"user" : "rpcuser",
-	"pass" : "rpcpass",
+	"url" : "http://127.0.0.1:8252",
+	"user" : "cryptoniterpc",
+	"pass" : "pass",
 
 	"algo" : "sse2_64",
-	"threads" : "4",
-
-	"quiet" : true
+	"threads" : "8",
+	"quiet" : "false"
 }

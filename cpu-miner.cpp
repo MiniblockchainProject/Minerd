@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <time.h>
+#include <assert.h>
 #ifndef WIN32
 #include <sys/resource.h>
 #endif
@@ -26,14 +27,40 @@
 #include <jansson.h>
 #include <curl/curl.h>
 #include <openssl/sha.h>
+extern "C" {
 #include "compat.h"
 #include "miner.h"
+}
+#include "uint256.h"
+#include "hashblock.h"
 
 #define PROGRAM_NAME		"minerd"
-#define DEF_RPC_URL		"http://127.0.0.1:8332/"
+#define DEF_RPC_URL		"http://127.0.0.1:8252/"
 #define DEF_RPC_USERNAME	"rpcuser"
 #define DEF_RPC_PASSWORD	"rpcpass"
 #define DEF_RPC_USERPASS	DEF_RPC_USERNAME ":" DEF_RPC_PASSWORD
+
+#define BEGIN(a)            ((char*)&(a))
+#define END(a)              ((char*)&((&(a))[1]))
+
+
+const signed char p_util_hexdigit[256] =
+{ -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  0,1,2,3,4,5,6,7,8,9,-1,-1,-1,-1,-1,-1,
+  -1,0xa,0xb,0xc,0xd,0xe,0xf,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,0xa,0xb,0xc,0xd,0xe,0xf,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1, };
 
 #ifdef __linux /* Linux specific policy and affinity management */
 #include <sched.h>
@@ -89,11 +116,10 @@ bool use_syslog = false;
 static bool opt_quiet = false;
 static int opt_retries = INT_MAX; // default: almost infinite retries
 static int opt_fail_pause = 10;
-int opt_scantime = 120;
+int opt_scantime = 1;
 static json_t *opt_config;
 static const bool opt_time = true;
 static int opt_n_threads;
-static int opt_n_threads_mmc;
 static int num_processors;
 static char *rpc_url;
 static char *rpc_userpass;
@@ -190,11 +216,26 @@ static struct option options[] = {
 	{ }
 };
 
-struct work {
-	unsigned char	data[128];
-	unsigned char	target[32];
+#pragma pack(push,1)
+class CBlockHeader
+{
+public:
+    //!!!!!!!!!!! struct must be in packed order even though serialize order is version first
+    //or else we can't use hash macros, could also use #pragma pack but that has 
+    //terrible implicatation on non-x86
+    uint256 hashPrevBlock;
+    uint256 hashMerkleRoot;
+    uint256 hashAccountRoot;
+    uint64_t nTime;
+    uint64_t nHeight;
+    uint64_t nNonce;
+    uint16_t nVersion;
+};
+#pragma pack(pop)
 
-	unsigned char	hash[32];
+struct work {
+	CBlockHeader 	data;
+	uint256	target,hash;
 };
 
 static bool jobj_binary(const json_t *obj, const char *key,
@@ -213,7 +254,7 @@ static bool jobj_binary(const json_t *obj, const char *key,
 		applog(LOG_ERR, "JSON key '%s' is not a string", key);
 		return false;
 	}
-	if (!hex2bin(buf, hexstr, buflen))
+	if (!hex2bin((unsigned char *)buf, hexstr, buflen))
 		return false;
 
 	return true;
@@ -221,18 +262,18 @@ static bool jobj_binary(const json_t *obj, const char *key,
 
 static bool work_decode(const json_t *val, struct work *work)
 {
-	if (unlikely(!jobj_binary(val, "data", work->data, sizeof(work->data)))) {
+	if (unlikely(!jobj_binary(val, "data", &work->data, sizeof(work->data)))) {
+		printf("%ld\n", sizeof(work->data));
 		applog(LOG_ERR, "JSON inval data");
 		goto err_out;
 	}
 
-	if (unlikely(!jobj_binary(val, "target", work->target, sizeof(work->target)))) {
+	if (unlikely(!jobj_binary(val, "target", &work->target, sizeof(work->target)))) {
 		applog(LOG_ERR, "JSON inval target");
 		goto err_out;
 	}
 
-	memset(work->hash, 0, sizeof(work->hash));
-
+	work->hash = 0;
 	return true;
 
 err_out:
@@ -247,7 +288,7 @@ static bool submit_upstream_work(CURL *curl, const struct work *work)
 	bool rc = false;
 
 	/* build hex string */
-	hexstr = bin2hex(work->data, 88);
+	hexstr = bin2hex((unsigned char*)&work->data, sizeof(work->data));
 	if (unlikely(!hexstr)) {
 		applog(LOG_ERR, "submit_upstream_work OOM");
 		goto out;
@@ -302,6 +343,8 @@ static bool get_upstream_work(CURL *curl, struct work *work)
 		return false;
 
 	rc = work_decode(json_object_get(val, "result"), work);
+    
+        //printf("%ld %s\n", work->data.nHeight, work->target.GetHex().c_str());
 
 	json_decref(val);
 
@@ -330,7 +373,7 @@ static bool workio_get_work(struct workio_cmd *wc, CURL *curl)
 	struct work *ret_work;
 	int failures = 0;
 
-	ret_work = calloc(1, sizeof(*ret_work));
+	ret_work = (struct work *)calloc(1, sizeof(*ret_work));
 	if (!ret_work)
 		return false;
 
@@ -377,7 +420,7 @@ static bool workio_submit_work(struct workio_cmd *wc, CURL *curl)
 
 static void *workio_thread(void *userdata)
 {
-	struct thr_info *mythr = userdata;
+	struct thr_info *mythr = (struct thr_info*)userdata;
 	CURL *curl;
 	bool ok = true;
 
@@ -391,7 +434,7 @@ static void *workio_thread(void *userdata)
 		struct workio_cmd *wc;
 
 		/* wait for workio_cmd sent to us, on our queue */
-		wc = tq_pop(mythr->q, NULL);
+		wc = (workio_cmd*)tq_pop(mythr->q, NULL);
 		if (!wc) {
 			ok = false;
 			break;
@@ -427,7 +470,7 @@ static void hashmeter(int thr_id, const struct timeval *diff, unsigned long hash
 	secs = (double)diff->tv_sec + ((double)diff->tv_usec / 1000000.0);
 	if (!opt_quiet)
 		// applog(LOG_INFO, "thread %d: %.3f hash/min", thr_id, hashes * 60 / secs);
-		applog(LOG_INFO, "Stats: %.3f hash/min", hashes_done * 60 / secs);
+		applog(LOG_INFO, "thread %d: %.3f hash/sec", thr_id, hashes_done / secs);
 }
 
 static bool get_work(struct thr_info *thr, struct work *work)
@@ -436,7 +479,7 @@ static bool get_work(struct thr_info *thr, struct work *work)
 	struct work *work_heap;
 
 	/* fill out work request message */
-	wc = calloc(1, sizeof(*wc));
+	wc = (struct workio_cmd*)calloc(1, sizeof(*wc));
 	if (!wc)
 		return false;
 
@@ -450,7 +493,7 @@ static bool get_work(struct thr_info *thr, struct work *work)
 	}
 
 	/* wait for response, a unit of work */
-	work_heap = tq_pop(thr->q, NULL);
+	work_heap = (struct work*)tq_pop(thr->q, NULL);
 	if (!work_heap)
 		return false;
 
@@ -466,11 +509,11 @@ static bool submit_work(struct thr_info *thr, const struct work *work_in)
 	struct workio_cmd *wc;
 
 	/* fill out work request message */
-	wc = calloc(1, sizeof(*wc));
+	wc = (struct workio_cmd*)calloc(1, sizeof(*wc));
 	if (!wc)
 		return false;
 
-	wc->u.work = malloc(sizeof(*work_in));
+	wc->u.work = (work*)malloc(sizeof(*work_in));
 	if (!wc->u.work)
 		goto err_out;
 
@@ -489,57 +532,40 @@ err_out:
 	return false;
 }
 
-uint32_t CalculateBestBirthdayHash(unsigned char *head, unsigned char *data, char *scratchpad, int totalThreads, volatile unsigned long *restart);
-
-bool scanhash(int thr_id, unsigned char *data, const unsigned char *target, uint32_t max_nonce, uint64_t *hashes_done)
+bool scanhash(int thr_id, CBlockHeader *header, uint256 target, uint32_t max_nonce, uint64_t *hashes_done)
 {
 	int i;
-	uint32_t *nonce = (uint32_t *)(data + 76);
-	uint32_t n = 0;
+	uint64_t n = 0;
 	uint64_t stat_ctr = 0;
 
 	work_restart[thr_id].restart = 0;
 
 	while (1) {
-		unsigned char _hash[32], hash[32];
-		*nonce = n++;
-		SHA256(data, 80, _hash);
-		SHA256(_hash, 32, hash);
-		/*stat_ctr += -- MMC */ CalculateBestBirthdayHash((unsigned char *)hash, data, scratchpad, opt_n_threads_mmc, &work_restart[thr_id].restart);
+		header->nNonce = (((uint64_t)thr_id) << (48)) + n++;
+
+		uint256 hash = Hash7(BEGIN(header->hashPrevBlock), END(header->nVersion));
+
 		stat_ctr += 1;
-		bool found = !work_restart[thr_id].restart;
+		bool found = hash < target;
 		if (found) {
-			for (i = 31; i >= 0; i--) {
-				if (hash[i] != target[i]) {
-					found = hash[i] < target[i];
-					break;
-				}
-			}
-		}
-		if (found) {
-			applog(LOG_INFO, "Found share ...%02x%02x%02x%02x%02x%02x%02x%02x: submitting", 
-				hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]);
+			applog(LOG_INFO, "Found share ...%s: submitting", hash.GetHex().c_str());
 			*hashes_done = stat_ctr;
 			return true;
-		} else {
-			if (opt_debug)
-				applog(LOG_DEBUG, "Found share ...%02x%02x%02x%02x%02x%02x%02x%02x: above target", 
-					hash[24], hash[25], hash[26], hash[27], hash[28], hash[29], hash[30], hash[31]);
-		}
+		} 
 
 		// MMC scans only once
-		// if ((n >= max_nonce) || work_restart[thr_id].restart) {
-			*hashes_done = stat_ctr;
+		if ((n >= max_nonce) || work_restart[thr_id].restart) {
+		 	*hashes_done = n;
 			return false;
-		// }
+		}
 	}
 }
 
 static void *miner_thread(void *userdata)
 {
-	struct thr_info *mythr = userdata;
+	struct thr_info *mythr = (struct thr_info*)userdata;
 	int thr_id = mythr->id;
-	uint32_t max_nonce = 0xffffff;
+	uint32_t max_nonce = 0xfffff ;
 
 	/* Set worker threads to nice 19 and then preferentially to SCHED_IDLE
 	 * and if that fails, then SCHED_BATCH. No need for this to be an
@@ -566,10 +592,12 @@ static void *miner_thread(void *userdata)
 			goto out;
 		}
 
+		//printf("Scan\n");
+
 		hashes_done = 0;
 		gettimeofday(&tv_start, NULL);
 
-		rc = scanhash(thr_id, work.data, work.target, max_nonce, &hashes_done);
+		rc = scanhash(thr_id, &work.data, work.target, max_nonce, &hashes_done);
 
 		/* record scanhash elapsed time */
 		gettimeofday(&tv_end, NULL);
@@ -582,11 +610,12 @@ static void *miner_thread(void *userdata)
 			diff.tv_sec++;
 		if (diff.tv_sec > 0) {
 			max64 =
-			   (hashes_done / 65536 * opt_scantime) / diff.tv_sec;
+			   (hashes_done * opt_scantime) / diff.tv_sec;
 			if (max64 > 0xfffffffaULL)
 				max64 = 0xfffffffaULL;
 			max_nonce = max64;
 		}
+		//printf("Scan2\n");
 
 		/* if nonce found, submit work */
 		if (rc && !submit_work(mythr, &work))
@@ -609,13 +638,13 @@ static void restart_threads(void)
 
 static void *longpoll_thread(void *userdata)
 {
-	struct thr_info *mythr = userdata;
+	struct thr_info *mythr = (struct thr_info*)userdata;
 	CURL *curl = NULL;
 	char *copy_start, *hdr_path, *lp_url = NULL;
 	bool need_slash = false;
 	int failures = 0;
 
-	hdr_path = tq_pop(mythr->q, NULL);
+	hdr_path = (char*)tq_pop(mythr->q, NULL);
 	if (!hdr_path)
 		goto out;
 
@@ -631,12 +660,12 @@ static void *longpoll_thread(void *userdata)
 		if (rpc_url[strlen(rpc_url) - 1] != '/')
 			need_slash = true;
 
-		lp_url = malloc(strlen(rpc_url) + strlen(copy_start) + 2);
+		lp_url = (char*)malloc(strlen(rpc_url) + strlen(copy_start) + 2);
 		if (!lp_url)
 			goto out;
 
-		sprintf(lp_url, "%s%s%s", rpc_url, need_slash ? "/" : "", copy_start);
 	}
+		sprintf(lp_url, "%s%s%s", rpc_url, need_slash ? "/" : "", copy_start);
 
 	applog(LOG_INFO, "Long-polling activated for %s", lp_url);
 
@@ -759,7 +788,6 @@ static void parse_arg (int key, char *arg)
 //			show_usage();
 
 		opt_n_threads = v;
-		opt_n_threads_mmc = v;
 		break;
 	case 'u':
 		free(rpc_user);
@@ -798,30 +826,7 @@ static void parse_arg (int key, char *arg)
 	if (!opt_n_threads)
 		opt_n_threads = num_processors;
 #endif /* !WIN32 */
-
-	// MMC
-	opt_n_threads = 1;
-
-#ifdef WIN32
-	if (!opt_n_threads_mmc)
-		opt_n_threads_mmc = 1;
-#else
-	num_processors = sysconf(_SC_NPROCESSORS_ONLN);
-	if (!opt_n_threads_mmc)
-		opt_n_threads_mmc = num_processors;
-#endif /* !WIN32 */
-
-	if (opt_n_threads_mmc & (opt_n_threads_mmc - 1)) // check for power of 2
-	{
-	    // round to the next power of 2
-		opt_n_threads_mmc--;
-        opt_n_threads_mmc |= opt_n_threads_mmc >> 1;
-        opt_n_threads_mmc |= opt_n_threads_mmc >> 2;
-        opt_n_threads_mmc |= opt_n_threads_mmc >> 4;
-        opt_n_threads_mmc |= opt_n_threads_mmc >> 8;
-        opt_n_threads_mmc |= opt_n_threads_mmc >> 16;
-        opt_n_threads_mmc++;
-    }
+    
 }
 
 static void parse_config(void)
@@ -891,7 +896,7 @@ int main (int argc, char *argv[])
 		if (!rpc_pass) {
 			rpc_pass = strdup("x");
 		}
-		rpc_userpass = malloc(strlen(rpc_user) + strlen(rpc_pass) + 2);
+		rpc_userpass = (char*)malloc(strlen(rpc_user) + strlen(rpc_pass) + 2);
 		if (!rpc_userpass)
 			return 1;
 		sprintf(rpc_userpass, "%s:%s", rpc_user, rpc_pass);
@@ -902,11 +907,11 @@ int main (int argc, char *argv[])
 		openlog("cpuminer", LOG_PID, LOG_USER);
 #endif
 
-	work_restart = calloc(opt_n_threads, sizeof(*work_restart));
+	work_restart = (struct work_restart*)calloc(opt_n_threads, sizeof(*work_restart));
 	if (!work_restart)
 		return 1;
 
-	thr_info = calloc(opt_n_threads + 2, sizeof(*thr));
+	thr_info = (struct thr_info*)calloc(opt_n_threads + 2, sizeof(*thr));
 	if (!thr_info)
 		return 1;
 
@@ -962,8 +967,8 @@ int main (int argc, char *argv[])
 	}
 
 	applog(LOG_INFO, "%d miner threads started, "
-		"using MMC Momentum Proof-of-Work algorithm.",
-		opt_n_threads_mmc);
+		"using M7 Proof-of-Work algorithm.",
+		opt_n_threads);
 
 	/* main loop - simply wait for workio thread to exit */
 	pthread_join(thr_info[work_thr_id].pth, NULL);

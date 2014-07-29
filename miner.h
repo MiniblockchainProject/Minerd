@@ -122,8 +122,8 @@ static inline uint32_t swab32(uint32_t v)
 
 static inline void swap256(void *dest_p, const void *src_p)
 {
-	uint32_t *dest = dest_p;
-	const uint32_t *src = src_p;
+	uint32_t *dest = (uint32_t*)dest_p;
+	const uint32_t *src = (const uint32_t*)src_p;
 
 	dest[0] = src[7];
 	dest[1] = src[6];

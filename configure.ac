@@ -2,7 +2,7 @@ AC_INIT([cpuminer], [1.0.2])
 
 AC_PREREQ(2.52)
 AC_CANONICAL_SYSTEM
-AC_CONFIG_SRCDIR([cpu-miner.c])
+AC_CONFIG_SRCDIR([cpu-miner.cpp])
 AM_INIT_AUTOMAKE([gnu])
 AC_CONFIG_HEADERS([cpuminer-config.h])
 
@@ -47,6 +47,9 @@ AC_CHECK_LIB(pthread, pthread_create, PTHREAD_LIBS=-lpthread)
 AC_CHECK_HEADERS([openssl/evp.h],[],[AC_MSG_ERROR([OpenSSL headers required])])
 AC_CHECK_LIB([ssl],[SSL_library_init], [], [AC_MSG_ERROR([OpenSSL library required])])
 AC_CHECK_LIB([crypto],[EVP_DigestFinal_ex], [], [AC_MSG_ERROR([OpenSSL library required])])
+
+AC_CHECK_HEADER([gmp.h],,AC_MSG_ERROR(gmp headers missing))
+AC_CHECK_LIB(gmp,main,GMP_LIBS=-lgmp,AC_MSG_ERROR([gmp library not found. Please install it.]),[])
 
 AM_CONDITIONAL([WANT_JANSSON], [test x$request_jansson = xtrue])
 AM_CONDITIONAL([HAVE_WINDOWS], [test x$have_win32 = xtrue])
