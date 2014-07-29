@@ -1,5 +1,15 @@
 
-This is a multi-threaded CPU miner for MemoryCoin 2.0.
+This is a multi-threaded CPU miner for M7/Cryptonite
+
+Success is not guaranteed here. It mines blocks on testnet. Can be problems with
+all threads maybe mining same nonce, overload of daemon. Anything.
+
+
+YOU MUST SET THE EXTRANONCE PARAMETER IN THE CONF FILE TO BE ABLE TO MINE
+WITH MULTIPLE MACHINES CONNECTED TO A SINGLE DAEMON. 
+
+Your daemon should be 14072918 or better. 
+
 
 License: GPLv2.  See COPYING for details.
 
