@@ -285,12 +285,14 @@ err_out:
 	return false;
 }
 
-static bool submit_upstream_work(CURL *curl, const struct work *work)
+static bool submit_upstream_work(CURL *curl, struct work *work)
 {
 	char *hexstr = NULL;
 	json_t *val, *res, *err;
 	char s[345];
 	bool rc = false;
+
+        //work->data.nHeight++;
 
 	/* build hex string */
 	hexstr = bin2hex((unsigned char*)&work->data, sizeof(work->data));
@@ -541,6 +543,7 @@ bool scanhash(int thr_id, CBlockHeader *header, uint256 target, uint32_t max_non
 {
 	int i;
 	uint64_t n = 0;
+	uint64_t original_nonce=header->nNonce;
 	uint64_t stat_ctr = 0;
 
 	work_restart[thr_id].restart = 0;
@@ -549,7 +552,7 @@ bool scanhash(int thr_id, CBlockHeader *header, uint256 target, uint32_t max_non
         HashInit(ctx);
 
 	while (1) {
-		header->nNonce = (((uint64_t)thr_id) << 24) + ((uint64_t)opt_extranonce << 32) + n++;
+		header->nNonce = original_nonce + (((uint64_t)thr_id) << 24) + ((uint64_t)opt_extranonce << 32) + n++;
 		//printf("%d %lX\n", opt_extranonce, header->nNonce);
 		uint256 hash = Hash7(ctx,BEGIN(header->hashPrevBlock), END(header->nVersion));
 

@@ -9,5 +9,5 @@
 	"algo" : "sse2_64",
 	"threads" : "1",
 	"quiet" : "false",	
-        "extranonce" : "1"
+        "extranonce" : "8"
 }
