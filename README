@@ -7,6 +7,7 @@ all threads maybe mining same nonce, overload of daemon. Anything.
 
 YOU MUST SET THE EXTRANONCE PARAMETER IN THE CONF FILE TO BE ABLE TO MINE
 WITH MULTIPLE MACHINES CONNECTED TO A SINGLE DAEMON. SEE exmaple-cfg.json
+A DIFFERENT NONCE IS REQUIRED FOR **EACH** MINER
 
 Your daemon should be 14072918 or better. 
 
